@@ -6,51 +6,80 @@ if (!webhookUrl) {
     throw new Error("Missing DISCORD_WEBHOOK_URL in environment");
 }
 
-function extractFieldsFromCameoEmail(html: string): {
+export function extractFieldsFromCameoEmail(html: string): {
     subject: string;
     from: string;
     fields: { name: string; value: string; inline: boolean; }[];
 } {
     const { document } = parseHTML(html);
-
-    // Fallbacks
-    const subject = document.querySelector("title")?.textContent?.trim() || "No Subject";
-    const fromMeta = document.querySelector("meta[name='from']")?.getAttribute("content") || "Cameo";
-
-    const requestDetailsSection = Array.from(document.querySelectorAll("p, div"))
-        .find((el) => el.textContent?.includes("Request details"));
+    const subject = document.querySelector("title")?.textContent?.trim() || "Cameo";
+    const from = "Cameo <cameo@m.cameo.com>";
 
     const fields: { name: string; value: string; inline: boolean; }[] = [];
 
-    if (requestDetailsSection) {
-        // Traverse siblings after "Request details"
-        let node = requestDetailsSection.nextElementSibling;
-        while (node && fields.length < 20) {
-            const labelMatch = node.innerHTML.match(/<strong>(.*?)<\/strong><br\s*\/?>\s*(.*?)<br\s*\/?>?/i);
-            if (labelMatch) {
-                const name = labelMatch[1].replace(/:$/, "").trim();
-                const value = labelMatch[2].trim();
-                if (name && value && value !== "&nbsp;" && value !== "") {
-                    fields.push({ name, value, inline: false });
-                }
-            } else if (node.innerText.includes("Instructions")) {
-                const raw = node.innerText.trim().replace(/\s+/g, " ");
-                fields.push({
-                    name: "Instructions",
-                    value: raw.slice(0, 1024),
-                    inline: false,
-                });
-            }
+    // Step 1: Find the <p> that follows "Request details"
+    const allPs = Array.from(document.querySelectorAll("p"));
+    const detailsIdx = allPs.findIndex((p) =>
+        p.textContent?.toLowerCase().includes("request details")
+    );
 
-            node = node.nextElementSibling;
+    if (detailsIdx === -1 || detailsIdx + 1 >= allPs.length) {
+        return { subject, from, fields }; // bail early
+    }
+
+    const detailsParagraph = allPs[detailsIdx + 1];
+
+    // Step 2: Read HTML from that <p>, clean & parse blocks
+    const content = detailsParagraph.innerHTML
+        .replace(/&nbsp;/g, " ")
+        .replace(/<br\s*\/?>/gi, "\n")
+        .replace(/\r?\n/g, "\n")
+        .trim();
+
+    // Step 3: Match <strong>Label:</strong> Value chunks
+    const fieldRegex = /<strong>([^<:]+):<\/strong>\s*\n([^<]+(?:\n(?!<strong>).+)*)/gi;
+
+    let match: RegExpExecArray | null;
+    while ((match = fieldRegex.exec(content))) {
+        const rawName = match[1].trim();
+        const rawValue = match[2]
+            .replace(/<[^>]+>/g, "") // remove all HTML tags
+            .replace(/\s+/g, " ")    // normalize whitespace
+            .replace(/\\n/g, "")
+            .trim();
+
+
+        if (rawName && rawValue) {
+            fields.push({
+                name: rawName,
+                value: rawValue.slice(0, 1024),
+                inline: false,
+            });
         }
     }
 
-    return {
-        subject,
-        from: fromMeta,
-        fields,
-    };
+    // Step 4: Handle "Instructions" block separately
+    const instructionsMatch = content.match(
+        /<strong>Instructions:<\/strong>\s*\n([\s\S]*?)<strong>Privacy:/i
+    );
+
+    if (instructionsMatch) {
+        const instructionsRaw = instructionsMatch[1]
+            .replace(/<[^>]+>/g, "") // remove HTML tags
+            .replace(/\s+/g, " ")    // normalize whitespace
+            .replace(/\\n/g, "")
+            .trim();
+
+        if (instructionsRaw) {
+            fields.push({
+                name: "Instructions",
+                value: instructionsRaw.slice(0, 1024),
+                inline: false,
+            });
+        }
+    }
+
+    return { subject, from, fields };
 }
 
 
