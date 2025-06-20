@@ -47,6 +47,9 @@ app.post("/mailgun", async ({ body, set }) => {
     const plainBody = (body as Record<string, string>)["body-plain"] ?? "";
     const fields = extractFieldsFromHtml(htmlBody || plainBody);
 
+    console.log(plainBody);
+    console.log(fields);
+
 
     const embed = {
         title: subject || "No Subject",
