@@ -115,6 +115,7 @@ app.post("/mailgun", async ({ body, set }) => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+            content: "@everyone",
             username: "Cameo",
             avatar_url: "https://play-lh.googleusercontent.com/_FPZW0siOqA6du-OLwA3Mz_i6y-KT5cNpZBVcccQNHJ4iMgaeLKraPBYl87qXjz3984",
             embeds: [embed],
