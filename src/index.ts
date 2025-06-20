@@ -1,48 +1,58 @@
 import { Elysia } from "elysia";
+import { parseHTML } from "linkedom";
 
 const webhookUrl = process.env.DISCORD_WEBHOOK_URL;
 if (!webhookUrl) {
     throw new Error("Missing DISCORD_WEBHOOK_URL in environment");
 }
-function extractFieldsFromHtml(html: string): {
+
+function extractFieldsFromCameoEmail(html: string): {
     subject: string;
     from: string;
     fields: { name: string; value: string; inline: boolean; }[];
 } {
-    const text = html
-        .replace(/<br\s*\/?>/gi, "\n")
-        .replace(/<\/?[^>]+>/gi, "") // Remove HTML tags
-        .replace(/=E2=80=99/g, "’")
-        .replace(/=E2=80=9C/g, "“")
-        .replace(/=E2=80=9D/g, "”")
-        .replace(/=20/g, " ")
-        .replace(/=3D/g, "=")
-        .replace(/=\r?\n/g, "")
-        .replace(/\r/g, "")
-        .trim();
+    const { document } = parseHTML(html);
 
-    const subjectMatch = text.match(/Subject:\s*(.+)/i);
-    const fromMatch = text.match(/From:\s*(.+)/i);
+    // Fallbacks
+    const subject = document.querySelector("title")?.textContent?.trim() || "No Subject";
+    const fromMeta = document.querySelector("meta[name='from']")?.getAttribute("content") || "Cameo";
 
-    const fieldRegex = /(?:^|\n)([^\n:]{1,64}):\n([^\n][\s\S]*?)(?=\n[A-Za-z ]+:\n|$)/g;
+    const requestDetailsSection = Array.from(document.querySelectorAll("p, div"))
+        .find((el) => el.textContent?.includes("Request details"));
 
     const fields: { name: string; value: string; inline: boolean; }[] = [];
 
-    let match;
-    while ((match = fieldRegex.exec(text)) !== null) {
-        const name = match[1].trim().replace(/\s+/g, " ");
-        const value = match[2].trim();
-        if (name && value && name.length <= 256 && value.length <= 1024) {
-            fields.push({ name, value, inline: false });
+    if (requestDetailsSection) {
+        // Traverse siblings after "Request details"
+        let node = requestDetailsSection.nextElementSibling;
+        while (node && fields.length < 20) {
+            const labelMatch = node.innerHTML.match(/<strong>(.*?)<\/strong><br\s*\/?>\s*(.*?)<br\s*\/?>?/i);
+            if (labelMatch) {
+                const name = labelMatch[1].replace(/:$/, "").trim();
+                const value = labelMatch[2].trim();
+                if (name && value && value !== "&nbsp;" && value !== "") {
+                    fields.push({ name, value, inline: false });
+                }
+            } else if (node.innerText.includes("Instructions")) {
+                const raw = node.innerText.trim().replace(/\s+/g, " ");
+                fields.push({
+                    name: "Instructions",
+                    value: raw.slice(0, 1024),
+                    inline: false,
+                });
+            }
+
+            node = node.nextElementSibling;
         }
     }
 
     return {
-        subject: subjectMatch?.[1] ?? "No Subject",
-        from: fromMatch?.[1] ?? "Unknown",
+        subject,
+        from: fromMeta,
         fields,
     };
 }
+
 
 
 const app = new Elysia();
@@ -57,7 +67,8 @@ app.post("/mailgun", async ({ body, set }) => {
         return "Missing email body";
     }
 
-    const { subject, from, fields } = extractFieldsFromHtml(html);
+    const { subject, from, fields } = extractFieldsFromCameoEmail(html);
+
 
 
     console.log("Parsed email:", { subject, from, fields });
