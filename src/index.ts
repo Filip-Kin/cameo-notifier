@@ -1,61 +1,70 @@
 import { Elysia } from "elysia";
 
-const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 const webhookUrl = process.env.DISCORD_WEBHOOK_URL;
 if (!webhookUrl) {
     throw new Error("Missing DISCORD_WEBHOOK_URL in environment");
 }
 
-function extractFieldsFromHtml(input: string): { name: string; value: string; inline: boolean; }[] {
-    const stripped = input
-        .replace(/<br\s*\/?>/gi, "\n") // Convert <br> to newline
-        .replace(/<\/?[^>]+(>|$)/g, "") // Remove remaining HTML tags
-        .replace(/=E2=80=99/g, "’") // decode ’
-        .replace(/=E2=80=9D/g, "”") // decode ”
-        .replace(/=E2=80=9C/g, "“") // decode “
-        .replace(/=20/g, " ") // decode space
-        .replace(/=3D/g, "="); // decode =
+function extractFieldsFromHtml(html: string): {
+    subject: string;
+    from: string;
+    fields: { name: string; value: string; inline: boolean; }[];
+} {
+    const text = html
+        .replace(/<br\s*\/?>/gi, "\n")
+        .replace(/<\/?[^>]+(>|$)/g, "") // strip all tags
+        .replace(/=E2=80=99/g, "’")
+        .replace(/=E2=80=9C/g, "“")
+        .replace(/=E2=80=9D/g, "”")
+        .replace(/=20/g, " ")
+        .replace(/=3D/g, "=")
+        .replace(/=\r?\n/g, "") // soft line breaks
+        .trim();
 
-    // Match blocks like: **Field name:**\nvalue
-    const regex = /(?:\*\*|^)(.+?):\*\*?\s*\n([\s\S]*?)(?=\n{2,}|\n\*\*|$)/g;
+    const subjectMatch = text.match(/Subject:\s*(.+)/i);
+    const fromMatch = text.match(/From:\s*(.+)/i);
 
+    const fieldRegex = /([A-Za-z\s]+):\n([^\n]+(?:\n(?![A-Za-z\s]+:).+)*)/g;
     const fields: { name: string; value: string; inline: boolean; }[] = [];
+
     let match;
-    while ((match = regex.exec(stripped)) !== null) {
+    while ((match = fieldRegex.exec(text)) !== null) {
         const name = match[1].trim();
         const value = match[2].trim();
-        if (name && value) {
-            fields.push({ name, value, inline: false });
-        }
+        fields.push({ name, value, inline: false });
     }
 
-    return fields;
+    return {
+        subject: subjectMatch?.[1] || "No Subject",
+        from: fromMatch?.[1] || "Unknown",
+        fields,
+    };
 }
-
 
 const app = new Elysia();
 
 app.post("/mailgun", async ({ body, set }) => {
-    const {
-        subject,
-        from,
-        recipient,
-        "body-plain": bodyPlain,
-        "stripped-text": strippedText,
-    } = body as Record<string, string>;
-    const htmlBody = (body as Record<string, string>)["body-html"] ?? "";
-    const plainBody = (body as Record<string, string>)["body-plain"] ?? "";
-    const fields = extractFieldsFromHtml(htmlBody || plainBody);
+    const html = (body as Record<string, string>)["body"];
 
-    console.log(plainBody);
-    console.log(fields);
+    console.log(body);
 
+    if (!html) {
+        set.status = 400;
+        return "Missing email body";
+    }
+
+    const { subject, from, fields } = extractFieldsFromHtml(html);
+
+
+    console.log("Parsed email:", { subject, from, fields });
 
     const embed = {
-        title: subject || "No Subject",
+        title: subject,
         description: "📬 New Cameo request received.",
         color: 0x6a0dad,
-        fields,
+        fields: fields.length ? fields : [
+            { name: "From", value: from, inline: true },
+        ],
         timestamp: new Date().toISOString(),
         footer: { text: "Pit Podcast Email Bot" },
     };
@@ -73,12 +82,12 @@ app.post("/mailgun", async ({ body, set }) => {
     if (!res.ok) {
         console.error("Discord webhook failed:", res.statusText);
         set.status = 500;
-        return "Error sending to Discord";
+        return "Discord error";
     }
 
     return "OK";
 });
 
-app.listen(PORT, () => {
-    console.log("Listening on http://localhost:" + PORT);
+app.listen(3000, () => {
+    console.log("Listening on http://localhost:3000");
 });
