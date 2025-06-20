@@ -4,7 +4,6 @@ const webhookUrl = process.env.DISCORD_WEBHOOK_URL;
 if (!webhookUrl) {
     throw new Error("Missing DISCORD_WEBHOOK_URL in environment");
 }
-
 function extractFieldsFromHtml(html: string): {
     subject: string;
     from: string;
@@ -12,34 +11,39 @@ function extractFieldsFromHtml(html: string): {
 } {
     const text = html
         .replace(/<br\s*\/?>/gi, "\n")
-        .replace(/<\/?[^>]+(>|$)/g, "") // strip all tags
+        .replace(/<\/?[^>]+>/gi, "") // Remove HTML tags
         .replace(/=E2=80=99/g, "’")
         .replace(/=E2=80=9C/g, "“")
         .replace(/=E2=80=9D/g, "”")
         .replace(/=20/g, " ")
         .replace(/=3D/g, "=")
-        .replace(/=\r?\n/g, "") // soft line breaks
+        .replace(/=\r?\n/g, "")
+        .replace(/\r/g, "")
         .trim();
 
     const subjectMatch = text.match(/Subject:\s*(.+)/i);
     const fromMatch = text.match(/From:\s*(.+)/i);
 
-    const fieldRegex = /([A-Za-z\s]+):\n([^\n]+(?:\n(?![A-Za-z\s]+:).+)*)/g;
+    const fieldRegex = /(?:^|\n)([^\n:]{1,64}):\n([^\n][\s\S]*?)(?=\n[A-Za-z ]+:\n|$)/g;
+
     const fields: { name: string; value: string; inline: boolean; }[] = [];
 
     let match;
     while ((match = fieldRegex.exec(text)) !== null) {
-        const name = match[1].trim();
+        const name = match[1].trim().replace(/\s+/g, " ");
         const value = match[2].trim();
-        fields.push({ name, value, inline: false });
+        if (name && value && name.length <= 256 && value.length <= 1024) {
+            fields.push({ name, value, inline: false });
+        }
     }
 
     return {
-        subject: subjectMatch?.[1] || "No Subject",
-        from: fromMatch?.[1] || "Unknown",
+        subject: subjectMatch?.[1] ?? "No Subject",
+        from: fromMatch?.[1] ?? "Unknown",
         fields,
     };
 }
+
 
 const app = new Elysia();
 
@@ -62,9 +66,7 @@ app.post("/mailgun", async ({ body, set }) => {
         title: subject,
         description: "📬 New Cameo request received.",
         color: 0x6a0dad,
-        fields: fields.length ? fields : [
-            { name: "From", value: from, inline: true },
-        ],
+        fields: fields.length ? fields : [{ name: "From", value: from, inline: true }],
         timestamp: new Date().toISOString(),
         footer: { text: "Pit Podcast Email Bot" },
     };
